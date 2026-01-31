@@ -14,8 +14,8 @@
 pip install file-batch-tool
 
 # 方式2：从源码安装
-git clone https://gitee.com/你的Gitee用户名/file-batch-tool.git
-cd file-batch-tool
+git clone https://gitee.com/the-life/file_batch_tool.git
+cd file_batch_tool
 pip install -r requirements.txt
 ```
 
