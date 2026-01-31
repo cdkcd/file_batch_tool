@@ -88,7 +88,7 @@ def batch_convert_image(args):
                 img = bg
             new_name = img_path.stem + f".{args.to_format.lower()}"
             new_path = img_path.parent / new_name
-            img.save(new_path, args.to_format.upper())
+            img.save (new_path, args.to_format.lower ())
             convert_count += 1
         except Exception as e:
             print(f"\n⚠️ 处理 {img_path.name} 失败：{str(e)}")
@@ -218,7 +218,7 @@ def main():
     # 1. 重命名子命令
     parser_rename = subparsers.add_parser("rename", help="批量重命名文件")
     parser_rename.add_argument("-d", "--dir", required=True, help="目标目录（如 ./test）")
-    parser_rename.add_argument("-p", "--pattern", help="正则匹配模式（如 'img_(\d+)'）")
+    parser_rename.add_argument ("-p", "--pattern", help=r"正则匹配模式（如 'img_(\d+)'）")
     parser_rename.add_argument("-r", "--replace", help="正则替换内容（如 'photo_\\1'）")
     parser_rename.add_argument("--prefix", help="添加前缀（如 '2024_'）")
     parser_rename.add_argument("--suffix", help="添加后缀（如 '_v1'）")
