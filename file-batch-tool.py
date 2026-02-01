@@ -11,6 +11,7 @@
 """
 
 import os
+import sys
 import re
 import argparse
 import zipfile
@@ -245,65 +246,174 @@ def batch_watermark(args):
 
     print(f"✅ 水印添加完成，共处理 {count} 张图片")
 
-# --- 主函数 ---
-def main():
-    parser = argparse.ArgumentParser(
-        description="📁 文件批量处理工具 | 支持重命名/图片转换/压缩/分类/加水印",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    subparsers = parser.add_subparsers(dest="command", help="子命令（必选）")
 
-    # 1. 重命名子命令（修复转义字符警告）
-    parser_rename = subparsers.add_parser("rename", help="批量重命名文件")
-    parser_rename.add_argument("-d", "--dir", required=True, help="目标目录（如 ./test）")
-    parser_rename.add_argument("-p", "--pattern", help=r"正则匹配模式（如 'img_(\d+)'）")
-    parser_rename.add_argument("-r", "--replace", help="正则替换内容（如 'photo_\\1'）")
-    parser_rename.add_argument("--prefix", help="添加前缀（如 '2024_'）")
-    parser_rename.add_argument("--suffix", help="添加后缀（如 '_v1'）")
+# ========== 子命令帮助说明（核心：自定义子命令解释） ==========
+SUBCOMMAND_HELP = {
+    "总帮助": """
+📁 文件批量处理工具 - 使用手册
+========================================
+【核心功能】：批量处理文件/图片，支持重命名、格式转换、压缩、分类、加水印
+【使用方式】：输入 子命令 + 参数 即可执行，示例：rename -d D:\照片 --prefix 风景_
+【支持子命令】：
+  1. rename      - 批量重命名文件（支持前缀/后缀/正则替换）
+  2. convert-img - 批量转换图片格式（jpg/png/webp互转）
+  3. compress    - 批量压缩文件为ZIP（支持排除指定扩展名）
+  4. classify    - 批量分类文件（按扩展名/创建日期）
+  5. watermark   - 批量添加图片水印（文字/图片水印）
+【辅助指令】：
+  - -h/help              查看总帮助
+  - 子命令 -h            查看指定子命令的详细用法（如 rename -h）
+  - exit/quit            退出工具
+""",
+    "rename": """
+🔧 子命令：rename（批量重命名文件）
+========================================
+【功能】：给指定目录下的文件批量加前缀/后缀，或通过正则替换文件名
+【使用场景】：整理照片、文档，统一文件名格式
+【必选参数】：-d/--dir 目标目录（如 -d D:\旅行照片）
+【可选参数】：
+  --prefix   文件名前缀（如 --prefix 2024_）
+  --suffix   文件名后缀（如 --suffix _高清）
+  -p/--pattern  正则匹配模式（如 -p 'img_(\\d+)'）
+  -r/--replace  正则替换内容（如 -r 'photo_\\1'）
+【完整示例】：
+  1. 简单加前缀：rename -d D:\照片 --prefix 风景_
+  2. 加后缀：rename -d D:\文档 --suffix _v1
+  3. 正则替换：rename -d D:\截图 -p '截图(\\d+)' -r 'screenshot_\\1'
+""",
+    "convert-img": """
+🔧 子命令：convert-img（批量转换图片格式）
+========================================
+【功能】：将指定目录下的所有图片转换为目标格式（jpg/png/webp）
+【使用场景】：图片格式统一、减小图片体积（webp格式）
+【必选参数】：
+  -d/--dir       图片目录（如 -d D:\手机照片）
+  -f/--to-format 目标格式（如 -f png）
+【完整示例】：
+  1. 转PNG格式：convert-img -d D:\jpg图片 -f png
+  2. 转WebP格式：convert-img -d D:\照片 -f webp
+""",
+    "compress": """
+🔧 子命令：compress（批量压缩文件为ZIP）
+========================================
+【功能】：将指定目录下的文件压缩为ZIP包，支持排除指定扩展名文件
+【使用场景】：打包文件、节省存储空间
+【必选参数】：-d/--dir 目标目录（如 -d D:\待压缩文件）
+【可选参数】：
+  -o/--output  压缩包保存路径（如 -o D:\压缩包.zip，默认：目录名_compressed.zip）
+  --exclude    排除的扩展名（逗号分隔，如 --exclude zip,log,tmp）
+【完整示例】：
+  1. 基础压缩：compress -d D:\工作文件
+  2. 指定输出名：compress -d D:\照片 -o 2024旅行照片.zip
+  3. 排除指定文件：compress -d D:\下载 --exclude zip,exe
+""",
+    "classify": """
+🔧 子命令：classify（批量分类文件）
+========================================
+【功能】：按扩展名/创建日期将文件分类到不同子文件夹
+【使用场景】：整理杂乱的下载文件夹、桌面文件
+【必选参数】：
+  -d/--dir  目标目录（如 -d D:\下载）
+  -m/--mode 分类模式（ext=按扩展名，date=按创建日期）
+【完整示例】：
+  1. 按扩展名分类：classify -d D:\杂乱文件 -m ext
+     → 会生成：txt文件/、jpg文件/、exe文件/ 等子文件夹
+  2. 按日期分类：classify -d D:\照片 -m date
+     → 会生成：2024-01/、2024-02/ 等子文件夹
+""",
+    "watermark": """
+🔧 子命令：watermark（批量添加图片水印）
+========================================
+【功能】：给指定目录下的所有图片添加文字/图片水印
+【使用场景】：图片版权保护、添加标识
+【必选参数】：
+  -d/--dir    图片目录（如 -d D:\作品图片）
+  -t/--type   水印类型（text=文字水印，image=图片水印）
+【可选参数（text类型）】：
+  -c/--content  水印文字（如 -c 我的作品）
+  -s/--size     文字大小（默认24，如 -s 32）
+  -color        文字颜色（RGBA，默认(255,255,255,128)）
+  -o/--opacity  透明度（0-255，默认128）
+【可选参数（image类型）】：
+  -w/--watermark-path  水印图片路径（如 -w D:\水印.png）
+  -s/--size            水印图片尺寸（默认24）
+  -o/--opacity         透明度（0-255，默认128）
+【完整示例】：
+  1. 文字水印：watermark -d D:\图片 -t text -c 原创作品 -s 32
+  2. 图片水印：watermark -d D:\图片 -t image -w D:\logo.png -o 100
+"""
+}
 
-    # 2. 图片转换子命令
-    parser_img = subparsers.add_parser("convert-img", help="批量转换图片格式")
-    parser_img.add_argument("-d", "--dir", required=True, help="目标目录（如 ./images）")
-    parser_img.add_argument("-f", "--to-format", required=True, help="目标格式（jpg/png/webp）")
+# ========== 主函数 ==========
+def parse_command(args_list):
+    """仅解析子命令和参数，不处理-h，交给交互式逻辑统一处理"""
+    parser = argparse.ArgumentParser(add_help=False)
+    subparsers = parser.add_subparsers(dest="command")
 
-    # 3. 压缩子命令
-    parser_zip = subparsers.add_parser("compress", help="批量压缩文件为ZIP")
-    parser_zip.add_argument("-d", "--dir", required=True, help="目标目录（如 ./files）")
-    parser_zip.add_argument("-o", "--output", help="输出ZIP文件名（默认：{dir}_compressed.zip）")
-    parser_zip.add_argument("--exclude", help="排除的扩展名（逗号分隔，如 'zip,log'）")
+    # 仅定义参数结构，不处理任何help
+    parser_rename = subparsers.add_parser("rename", add_help=False)
+    parser_rename.add_argument("-d", "--dir")
+    parser_rename.add_argument("-p", "--pattern")
+    parser_rename.add_argument("-r", "--replace")
+    parser_rename.add_argument("--prefix")
+    parser_rename.add_argument("--suffix")
+    parser_rename.add_argument("-h", "--help", action="store_true")  # 仅标记，不处理
 
-    # 4. 分类子命令
-    parser_classify = subparsers.add_parser("classify", help="批量分类文件（按扩展名/日期）")
-    parser_classify.add_argument("-d", "--dir", required=True, help="目标目录")
-    parser_classify.add_argument("-m", "--mode", required=True, choices=["ext", "date"], help="分类模式：ext（扩展名）/ date（日期）")
+    parser_img = subparsers.add_parser("convert-img", add_help=False)
+    parser_img.add_argument("-d", "--dir")
+    parser_img.add_argument("-f", "--to-format")
+    parser_img.add_argument("-h", "--help", action="store_true")
 
-    # 5. 水印子命令
-    parser_watermark = subparsers.add_parser("watermark", help="批量添加图片水印（文字/图片）")
-    parser_watermark.add_argument("-d", "--dir", required=True, help="图片目录")
-    parser_watermark.add_argument("-t", "--type", required=True, choices=["text", "image"], help="水印类型")
-    parser_watermark.add_argument("-c", "--content", help="文字水印内容（type=text时必填）")
-    parser_watermark.add_argument("-f", "--font", help="文字水印字体路径（可选，默认系统字体）")
-    parser_watermark.add_argument("-s", "--size", type=int, default=24, help="水印大小（文字字号/图片尺寸，默认24）")
-    parser_watermark.add_argument("-color", "--color", default="(255,255,255,128)", help="文字水印颜色（RGBA，默认白色半透明：(255,255,255,128)）")
-    parser_watermark.add_argument("-o", "--opacity", type=int, default=128, help="水印透明度（0-255，默认128）")
-    parser_watermark.add_argument("-w", "--watermark-path", help="图片水印路径（type=image时必填）")
+    parser_zip = subparsers.add_parser("compress", add_help=False)
+    parser_zip.add_argument("-d", "--dir")
+    parser_zip.add_argument("-o", "--output")
+    parser_zip.add_argument("--exclude")
+    parser_zip.add_argument("-h", "--help", action="store_true")
 
-    args = parser.parse_args()
+    parser_classify = subparsers.add_parser("classify", add_help=False)
+    parser_classify.add_argument("-d", "--dir")
+    parser_classify.add_argument("-m", "--mode")
+    parser_classify.add_argument("-h", "--help", action="store_true")
 
+    parser_watermark = subparsers.add_parser("watermark", add_help=False)
+    parser_watermark.add_argument("-d", "--dir")
+    parser_watermark.add_argument("-t", "--type")
+    parser_watermark.add_argument("-c", "--content")
+    parser_watermark.add_argument("-f", "--font")
+    parser_watermark.add_argument("-s", "--size", type=int)
+    parser_watermark.add_argument("-color")
+    parser_watermark.add_argument("-o", "--opacity", type=int)
+    parser_watermark.add_argument("-w", "--watermark-path")
+    parser_watermark.add_argument("-h", "--help", action="store_true")
+
+    try:
+        args = parser.parse_args(args_list)
+        return args
+    except:
+        return None
+
+# ========== 执行功能函数 ==========
+def execute_command(args):
+    """执行实际功能，参数校验"""
     if not args.command:
-        parser.print_help()
+        print(SUBCOMMAND_HELP["总帮助"])
         return
-    if hasattr(args, "dir") and not Path(args.dir).exists():
+
+    # 基础路径校验
+    if hasattr(args, "dir") and args.dir and not Path(args.dir).exists():
         print(f"❌ 目录 {args.dir} 不存在")
         return
+
+    # 水印参数校验
     if args.command == "watermark":
         if args.type == "text" and not args.content:
-            print(f"❌ type=text时，必须指定 --content 文字内容")
+            print(f"❌ 请指定文字水印内容：-c 你的水印文字")
             return
         if args.type == "image" and not args.watermark_path:
-            print(f"❌ type=image时，必须指定 --watermark-path 图片路径")
+            print(f"❌ 请指定图片水印路径：-w 你的水印图片路径")
             return
 
+    # 执行功能
     try:
         if args.command == "rename":
             batch_rename(args)
@@ -315,8 +425,86 @@ def main():
             batch_classify(args)
         elif args.command == "watermark":
             batch_watermark(args)
+        print("\n✅ 执行完成！")
     except Exception as e:
         print(f"\n❌ 执行失败：{str(e)}")
 
+# ========== 交互式模式（核心：统一输出自定义帮助解释） ==========
+def interactive_mode():
+    """交互式模式：所有帮助指令均输出自定义的子命令解释"""
+    print("=" * 60)
+    print("        📁 文件批量处理工具 - 交互式模式        ")
+    print("=" * 60)
+    print("💡 指令说明：")
+    print("   → help / -h           查看总帮助（自定义解释）")
+    print("   → help 子命令 / 子命令 -h  查看子命令详细解释（如 help rename 或 rename -h）")
+    print("   → exit/quit           退出工具")
+    print("=" * 60 + "\n")
+
+    while True:
+        user_input = input(">>> ").strip()
+        if not user_input:
+            continue
+
+        # 退出指令
+        if user_input.lower() in ["exit", "quit"]:
+            print("\n👋 感谢使用，再见！")
+            sys.exit(0)
+
+        input_parts = user_input.split()
+        target_subcmd = None
+        is_help_cmd = False
+
+        # ========== 统一识别所有帮助指令 ==========
+        # 情况1：单独输入 -h/--help/help → 总帮助
+        if len(input_parts) == 1 and input_parts[0].lower() in ["-h", "--help", "help"]:
+            is_help_cmd = True
+        # 情况2：help 子命令（如 help rename）→ 子命令帮助
+        elif input_parts[0].lower() == "help" and len(input_parts) >= 2:
+            is_help_cmd = True
+            target_subcmd = input_parts[1]
+        # 情况3：子命令 -h（如 rename -h）→ 子命令帮助
+        else:
+            args = parse_command(input_parts)
+            if args and hasattr(args, "help") and args.help:
+                is_help_cmd = True
+                target_subcmd = args.command
+
+        # ========== 处理帮助指令（输出自定义解释） ==========
+        if is_help_cmd:
+            # 显示指定子命令的自定义解释
+            if target_subcmd and target_subcmd in SUBCOMMAND_HELP:
+                print(SUBCOMMAND_HELP[target_subcmd])
+            # 子命令不存在的提示
+            elif target_subcmd and target_subcmd not in SUBCOMMAND_HELP:
+                print(f"❌ 不支持的子命令：{target_subcmd}")
+                print(f"✅ 支持的子命令：rename/convert-img/compress/classify/watermark")
+            # 显示总帮助
+            else:
+                print(SUBCOMMAND_HELP["总帮助"])
+            print("\n" + "-" * 60 + "\n")
+            continue
+
+        # ========== 执行普通命令 ==========
+        args = parse_command(input_parts)
+        if args:
+            execute_command(args)
+        else:
+            print(f"\n❌ 命令格式错误！输入 help 或 -h 查看帮助")
+        print("\n" + "-" * 60 + "\n")
+
+# ========== 程序入口 ==========
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1:
+        # 命令行模式：同样输出自定义帮助解释
+        args = parse_command(sys.argv[1:])
+        if args and hasattr(args, "help") and args.help:
+            if args.command in SUBCOMMAND_HELP:
+                print(SUBCOMMAND_HELP[args.command])
+            else:
+                print(SUBCOMMAND_HELP["总帮助"])
+        else:
+            execute_command(args)
+    else:
+        # 双击exe：进入交互式模式
+        interactive_mode()
