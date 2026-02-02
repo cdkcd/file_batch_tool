@@ -1,74 +1,131 @@
-# 📁 文件批量处理工具
-轻量Python命令行工具，支持5大核心功能：重命名、图片转换、压缩、分类、加水印。
+# 文件批量处理工具 📁
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## ✨ 功能列表
-1. 📝 批量重命名：正则替换、前缀/后缀
-2. 🖼️ 图片转换：jpg/png/webp互转
-3. 📦 文件压缩：ZIP打包，支持排除文件
-4. 📂 文件分类：按扩展名/日期自动归档
-5. 🔖 图片水印：文字/图片水印，支持透明度调整
+一款基于 PyQt5 开发的跨平台图形化文件批量处理工具，无需命令行操作，纯可视化界面，支持文件重命名、图片格式转换、文件压缩、文件分类、图片加水印等高频办公场景需求，适配 Windows 系统，新手友好。
 
-## 🚀 安装方式
+## ✨ 核心特性
+- 🎨 **纯图形化界面**：替代命令行操作，点击选择即可完成所有配置，无需记参数
+- 🚀 **多线程处理**：后台执行任务，界面不卡顿，进度条实时显示处理进度
+- 📊 **完整日志输出**：所有操作日志可视化，可回溯执行过程和结果
+- 💾 **安全处理**：所有处理结果生成新文件，不覆盖原文件，避免数据丢失
+- 🔍 **格式全兼容**：支持大小写扩展名，自动处理图片透明通道等兼容性问题
+
+## 📋 功能清单
+| 功能模块       | 具体能力                                                                 |
+|----------------|--------------------------------------------------------------------------|
+| 批量重命名     | 前缀/后缀添加、正则表达式替换、自动跳过已存在文件                         |
+| 图片格式转换   | JPG/PNG/WEBP 互转、自动处理 RGBA 透明通道、JPG 自动填充白色背景          |
+| 文件压缩       | 批量压缩为 ZIP 包、自定义输出路径、排除指定扩展名文件                     |
+| 文件分类       | 按扩展名分类（如 txt/jpg/exe）、按创建日期分类（如 2024-01/2024-02）|
+| 图片加水印     | 文字水印（自定义字体/大小/颜色/透明度）、图片水印（自定义尺寸/透明度）|
+
+## 📥 快速使用
+### 方式1：直接下载可执行文件（推荐，无需编程环境）
+1. 进入仓库 [Releases 页面](https://gitee.com/the-life/file_batch_tool/releases)
+2. 下载最新版本的 `文件批量处理工具_v1.0.exe`（或对应版本号）
+3. 双击 exe 文件即可运行，无需安装 Python 或任何依赖
+
+### 方式2：源码运行（适合开发者/自定义修改）
+#### 环境要求
+- Python 3.8+（推荐 3.9/3.10）
+- Windows/Linux/macOS（Windows 体验最佳）
+
+#### 安装依赖
 ```bash
-# 方式1：通过pip安装
-python -m pip install file-batch-tool
-
-# 方式2：从源码安装（推荐）
+# 克隆仓库
 git clone https://gitee.com/the-life/file_batch_tool.git
 cd file_batch_tool
-python -m pip install -r requirements.txt
-```
 
-# 📖 使用示例
-使用之前
-找到 Python 的 Scripts 路径，比如：
-C:\Users\LX\AppData\Local\Programs\Python\Python3x\Scripts，把这个路径添加到系统环境变量 PATH 里。重新打开 PowerShell，执行：pip install -e .，之后就可以直接运行以下命令；或者将file-batch-tool替换为python file-batch-tool.py。
-### 批量重命名
-```bash
-# 给所有文件添加前缀 "2024_"
-file-batch-tool rename --dir ./test --prefix 2024_
+# 安装核心依赖
+pip install -r requirements.txt
+运行程序
+bash
+运行
+python main.py
+📸 界面预览
+主界面（多标签页布局）
 
-# 正则替换：将 "img_001.jpg" 改为 "photo_001.jpg"
-file-batch-tool rename --dir ./test --pattern "img_" --replace "photo_"
-```
 
-### 批量转换图片格式
-```bash
-# 将目录下所有图片转为jpg格式
-file-batch-tool convert-img --dir ./images --to-format jpg
-```
+批量重命名功能
 
-### 批量压缩文件
-```bash
-# 压缩 ./files 目录下所有文件（排除zip和log）
-file-batch-tool compress --dir ./files --output my_files.zip --exclude zip,log
-```
 
-### 批量分类文件
-```bash
-# 按扩展名分类
-file-batch-tool classify --dir ./files --mode ext
+图片加水印功能
 
-# 按创建日期分类（按月归档）
-file-batch-tool classify --dir ./files --mode date
-```
 
-### 批量添加水印
-```bash
-# 添加文字水印
-file-batch-tool watermark --dir ./images --type text --content "我的水印" --size 32
+截图说明：
+请将界面截图保存到仓库的 screenshots 目录下
+替换上述链接为实际截图路径（Gitee 支持 raw 直接访问）
+若无截图，可删除此部分或替换为文字描述
+📖 详细使用教程
+1. 批量重命名
+点击「批量重命名」标签页
+点击「选择目录」按钮，选择需要处理的文件所在目录
+可选配置：
+前缀：给所有文件名添加统一前缀（如 风景_）
+后缀：给所有文件名添加统一后缀（如 _高清）
+正则匹配 / 替换：按正则规则修改文件名（如替换 img_123 为 photo_123）
+点击「开始重命名」，等待进度条完成，日志区会显示处理结果
+2. 图片格式转换
+点击「图片格式转换」标签页
+选择图片所在目录，选择目标格式（JPG/PNG/WEBP）
+点击「开始转换」，转换后的图片会自动添加 _converted 后缀（如 photo.jpg → photo_converted.png）
+注意：转换为 JPG 时，透明区域会自动填充白色
+3. 文件压缩
+点击「文件压缩」标签页
+选择需要压缩的文件目录
+可选配置：
+压缩包路径：自定义 ZIP 包保存位置（默认：目录名_compressed.zip）
+排除扩展名：填写无需压缩的扩展名（逗号分隔，如 zip,log,tmp）
+点击「开始压缩」，完成后日志区会显示压缩包保存路径
+4. 文件分类
+点击「文件分类」标签页
+选择需要整理的文件目录
+选择分类模式：
+按扩展名：自动创建 txt/jpg/exe 等子文件夹，分类存放对应文件
+按创建日期：自动创建 2024-01/2024-02 等子文件夹，按文件创建月份分类
+点击「开始分类」，所有文件会被归档到 classified 子文件夹
+5. 图片加水印
+文字水印
+选择「图片加水印」标签页，选择「text（文字水印）」
+选择图片目录，填写水印文字（如「原创作品」）
+可选配置：
+字体文件：选择自定义字体（TTF/OTF 格式，默认使用系统字体）
+文字大小：设置水印文字大小（8-100 可选）
+颜色：填写 RGBA 格式颜色（如 (255,255,255,128)，最后一位为透明度）
+透明度：0-255 可调（数值越小越透明）
+点击「开始加水印」，水印默认添加在图片右下角
+图片水印
+选择「图片加水印」标签页，选择「image（图片水印）」
+选择图片目录，点击「选择图片」添加水印图片（推荐 PNG 透明格式）
+配置水印尺寸和透明度，点击「开始加水印」即可
+⚠️ 注意事项
+处理大量文件（如上千张图片）时，请勿关闭程序，等待进度条完成
+所有处理结果均生成新文件，原文件不会被修改 / 覆盖，可放心使用
+建议处理重要文件前先备份，避免因异常操作导致数据丢失
+图片加水印后会添加 watermarked_ 前缀，格式转换后会添加 _converted 后缀
+Windows 系统若报「杀毒软件拦截」，请将 exe 文件加入信任列表
+🛠️ 技术栈
+模块	技术 / 库	作用
+GUI 框架	PyQt5	图形化界面开发
+图片处理	Pillow (PIL)	图片格式转换、加水印
+路径处理	pathlib	跨平台文件路径操作
+压缩功能	zipfile	ZIP 包创建和压缩
+正则处理	re	文件名正则替换
+多线程	PyQt5.QThread	后台任务执行，避免卡顿
+进度显示	tqdm（底层）/ QProgressBar（界面）	进度条展示
+📦 打包说明（可选）
+若需自行打包为 exe 文件，执行以下命令：
+bash
+运行
+# 安装打包工具
+pip install pyinstaller
 
-# 添加图片水印
-file-batch-tool watermark --dir ./images --type image --watermark-path ./logo.png --size 64
-```
-
-## 🤝 贡献指南
-欢迎提交Issue和PR！贡献步骤：
-1. Fork本仓库
-2. 创建功能分支：`git checkout -b feature/xxx`
-3. 提交变更：`git commit -m "新增xxx功能"`
-4. 推送分支：`git push origin feature/xxx`
-5. 提交PR
-
-## 📄 许可证
-MIT License
+# 打包为单个 exe（无命令行黑框）
+pyinstaller -F -w -i icon.ico main.py
+-F：打包为单个 exe 文件
+-w：窗口模式，隐藏命令行黑框
+-i：可选，设置 exe 图标（ICO 格式）
+📄 许可证
+本项目基于 MIT 许可证开源，你可以自由使用、修改、分发本项目代码，商用 / 非商用均可。
+🎯 问题反馈
+若使用过程中遇到 Bug 或功能建议，可在仓库「Issues」板块提交
