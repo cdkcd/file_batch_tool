@@ -8,30 +8,35 @@
 3. 批量压缩文件（ZIP）
 4. 批量文件分类（按扩展名/日期归档）
 5. 图片批量加水印（文字/图片水印）
+6. 批量修改文件时间（新增）
+7. 批量提取图片EXIF信息（新增）
+8. 批量复制/移动文件（新增）
 """
 
 import os
 import sys
 import re
 import zipfile
+import csv
+import time
 from pathlib import Path
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ExifTags
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QComboBox, QFileDialog,
-    QSpinBox, QDoubleSpinBox, QGroupBox, QMessageBox, QProgressBar
+    QSpinBox, QDoubleSpinBox, QGroupBox, QMessageBox, QProgressBar, QDateTimeEdit
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QDateTime
 from PyQt5.QtGui import QFont
 
 # 解决PIL处理大图片的DecompressionBombWarning
 Image.MAX_IMAGE_PIXELS = None
 
 
-# ===================== 原有功能函数（仅适配日志输出） =====================
+# ===================== 功能函数（修复统计逻辑） =====================
 def batch_rename(dir_path, prefix="", suffix="", pattern="", replace="", log_callback=None):
-    """批量重命名（适配GUI日志输出）"""
+    """批量重命名"""
 
     def log(msg):
         if log_callback:
@@ -39,48 +44,88 @@ def batch_rename(dir_path, prefix="", suffix="", pattern="", replace="", log_cal
         else:
             print(msg)
 
-    file_list = [f for f in Path(dir_path).glob("*") if f.is_file()]
-    if not file_list:
-        log(f"❌ 目录 {dir_path} 下未找到文件")
+    # 严格获取目录下的文件，排除子文件夹，精准去重
+    dir_path_obj = Path(dir_path)
+    if not dir_path_obj.is_dir():
+        log(f"❌ 路径 {dir_path} 不是有效目录")
         return False
 
-    pattern_compile = re.compile(pattern) if pattern else None
-    rename_count = 0
+    # 仅获取文件，彻底排除文件夹，避免把文件夹当作文件统计
+    file_list = [f for f in dir_path_obj.glob("*") if f.is_file()]
+    file_count = len(file_list)
 
-    log(f"📝 开始批量重命名，共找到 {len(file_list)} 个文件")
+    # 空目录精准判断，直接返回
+    if file_count == 0:
+        log(f"❌ 目录 {dir_path} 下未找到任何文件")
+        return False
+
+    # 正则预编译，增加异常捕获（避免正则语法错误导致整个任务崩溃）
+    pattern_compile = None
+    if pattern.strip():
+        try:
+            pattern_compile = re.compile(pattern)
+        except re.error as e:
+            log(f"❌ 正则表达式语法错误：{str(e)}")
+            return False
+
+    rename_count = 0  # 实际成功重命名的文件数
+    skip_count = 0  # 跳过的文件数（同名/无修改）
+
+    log(f"📝 开始批量重命名，共扫描到 {file_count} 个有效文件")
     for idx, file_path in enumerate(file_list):
         old_name = file_path.name
-        new_name = old_name
+        name, ext = os.path.splitext(old_name)  # 提前拆分主名和扩展名，避免重复处理
+        new_main_name = name
+        new_ext = ext
 
+        # 1. 正则替换（仅替换主名，避免扩展名被修改）
         if pattern_compile:
-            new_name = pattern_compile.sub(replace, new_name)
-        if prefix:
-            new_name = prefix + new_name
-        if suffix:
-            name, ext = os.path.splitext(new_name)
-            new_name = f"{name}{suffix}{ext}"
+            new_main_name = pattern_compile.sub(replace, new_main_name)
 
+        # 2. 添加前缀/后缀（仅对主名操作，保护扩展名）
+        if prefix:
+            new_main_name = prefix + new_main_name
+        if suffix:
+            new_main_name = new_main_name + suffix
+
+        # 拼接新文件名
+        new_name = new_main_name + new_ext
+        # 新老名称一致，直接跳过
         if new_name == old_name:
+            skip_count += 1
             continue
 
         new_path = file_path.parent / new_name
+        # 目标文件已存在，跳过并日志提示
         if new_path.exists():
-            log(f"\n⚠️ 文件 {new_path} 已存在，跳过")
+            log(f"⚠️ 跳过 {old_name}：新文件名 {new_name} 已存在")
+            skip_count += 1
             continue
 
-        file_path.rename(new_path)
-        rename_count += 1
-        # 更新进度（按百分比）
+        # 执行重命名，增加异常捕获（权限/文件占用）
+        try:
+            file_path.rename(new_path)
+            rename_count += 1
+            log(f"✅ 重命名：{old_name} → {new_name}")
+        except PermissionError:
+            log(f"⚠️ 跳过 {old_name}：无操作权限/文件被占用")
+            skip_count += 1
+        except Exception as e:
+            log(f"⚠️ 跳过 {old_name}：重命名失败 - {str(e)}")
+            skip_count += 1
+
+        # 实时更新进度（按总文件数计算，精准到1%）
         if log_callback:
-            progress = int((idx + 1) / len(file_list) * 100)
+            progress = int((idx + 1) / file_count * 100)
             log(f"progress:{progress}")
 
-    log(f"✅ 重命名完成，共处理 {rename_count} 个文件")
-    return True
+    # 最终统计日志，清晰展示结果
+    log(f"\n✅ 重命名任务结束 | 总文件：{file_count} | 成功重命名：{rename_count} | 跳过：{skip_count}")
+    return rename_count > 0  # 至少成功一个才返回True
 
 
 def batch_convert_image(dir_path, to_format, log_callback=None):
-    """批量转换图片格式（适配GUI日志输出）"""
+    """批量转换图片格式（适配GUI日志输出）- 修复统计错误"""
 
     def log(msg):
         if log_callback:
@@ -95,14 +140,16 @@ def batch_convert_image(dir_path, to_format, log_callback=None):
     for ext in SUPPORT_FORMATS:
         img_list.extend(Path(dir_path).glob(f"*.{ext}"))
         img_list.extend(Path(dir_path).glob(f"*.{ext.upper()}"))
-    img_list = [f for f in img_list if f.is_file()]
+    # 去重 + 仅保留文件
+    img_list = list({f for f in img_list if f.is_file()})
+    img_count = len(img_list)
 
-    if not img_list:
+    if img_count == 0:
         log(f"❌ 目录 {dir_path} 下未找到支持的图片文件（{SUPPORT_FORMATS}）")
         return False
 
     convert_count = 0
-    log(f"🖼️ 开始批量转换图片格式，共找到 {len(img_list)/2} 张图片")
+    log(f"🖼️ 开始批量转换图片格式，共找到 {img_count} 张图片")
 
     for idx, img_path in enumerate(img_list):
         try:
@@ -139,10 +186,10 @@ def batch_convert_image(dir_path, to_format, log_callback=None):
 
         # 更新进度
         if log_callback:
-            progress = int((idx + 1) / len(img_list) * 100)
+            progress = int((idx + 1) / img_count * 100)
             log(f"progress:{progress}")
 
-    log(f"✅ 图片转换完成，共成功处理 {convert_count/2} 张图片")
+    log(f"✅ 图片转换完成，共成功处理 {convert_count} 张图片")
     return True
 
 
@@ -160,7 +207,8 @@ def batch_compress(dir_path, output="", exclude="", log_callback=None):
         exclude_exts = [ext.strip() for ext in exclude.split(",")]
         file_list = [f for f in file_list if f.suffix.lstrip(".") not in exclude_exts]
 
-    if not file_list:
+    file_count = len(file_list)
+    if file_count == 0:
         log(f"❌ 目录 {dir_path} 下未找到可压缩的文件")
         return False
 
@@ -170,13 +218,13 @@ def batch_compress(dir_path, output="", exclude="", log_callback=None):
         log(f"❌ ZIP包 {zip_path} 已存在，请更换输出文件名")
         return False
 
-    log(f"📦 开始批量压缩文件，共找到 {len(file_list)} 个文件")
+    log(f"📦 开始批量压缩文件，共找到 {file_count} 个文件")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         for idx, file_path in enumerate(file_list):
             zipf.write(file_path, arcname=file_path.name)
             # 更新进度
             if log_callback:
-                progress = int((idx + 1) / len(file_list) * 100)
+                progress = int((idx + 1) / file_count * 100)
                 log(f"progress:{progress}")
 
     log(f"✅ 压缩完成！ZIP包已保存至：{zip_path.absolute()}")
@@ -193,7 +241,8 @@ def batch_classify(dir_path, mode, log_callback=None):
             print(msg)
 
     file_list = [f for f in Path(dir_path).glob("*") if f.is_file()]
-    if not file_list:
+    file_count = len(file_list)
+    if file_count == 0:
         log(f"❌ 目录 {dir_path} 下无文件")
         return False
 
@@ -201,7 +250,7 @@ def batch_classify(dir_path, mode, log_callback=None):
     classify_dir.mkdir(exist_ok=True)
     count = 0
 
-    log(f"📂 开始批量分类，共 {len(file_list)} 个文件")
+    log(f"📂 开始批量分类，共 {file_count} 个文件")
     for idx, file_path in enumerate(file_list):
         if mode == "ext":
             ext = file_path.suffix.lstrip(".").lower() or "no_ext"
@@ -224,7 +273,7 @@ def batch_classify(dir_path, mode, log_callback=None):
 
         # 更新进度
         if log_callback:
-            progress = int((idx + 1) / len(file_list) * 100)
+            progress = int((idx + 1) / file_count * 100)
             log(f"progress:{progress}")
 
     log(f"✅ 分类完成，共处理 {count} 个文件，已归档至 {classify_dir}")
@@ -233,7 +282,7 @@ def batch_classify(dir_path, mode, log_callback=None):
 
 def batch_watermark(dir_path, type_, content="", font="", size=24, color="(255,255,255,128)",
                     opacity=128, watermark_path="", log_callback=None):
-    """图片批量加水印（适配GUI日志输出）"""
+    """图片批量加水印（适配GUI日志输出）- 修复统计错误"""
 
     def log(msg):
         if log_callback:
@@ -245,14 +294,16 @@ def batch_watermark(dir_path, type_, content="", font="", size=24, color="(255,2
     img_list = []
     for ext in SUPPORT_FORMATS:
         img_list.extend(Path(dir_path).glob(f"*.{ext}"))
-    img_list = [f for f in img_list if f.is_file()]
+    # 去重 + 仅保留文件
+    img_list = list({f for f in img_list if f.is_file()})
+    img_count = len(img_list)
 
-    if not img_list:
+    if img_count == 0:
         log(f"❌ 目录 {dir_path} 下无支持的图片")
         return False
 
     count = 0
-    log(f"🔖 开始批量添加水印，共 {len(img_list)} 张图片")
+    log(f"🔖 开始批量添加水印，共 {img_count} 张图片")
 
     if type_ == "text":
         color_tuple = eval(color) if color else (255, 255, 255, 128)
@@ -302,14 +353,219 @@ def batch_watermark(dir_path, type_, content="", font="", size=24, color="(255,2
 
         # 更新进度
         if log_callback:
-            progress = int((idx + 1) / len(img_list) * 100)
+            progress = int((idx + 1) / img_count * 100)
             log(f"progress:{progress}")
 
     log(f"✅ 水印添加完成，共处理 {count} 张图片")
     return True
 
 
-# ===================== 线程类（避免界面卡顿） =====================
+# ===================== 新增功能函数（修复统计逻辑） =====================
+def batch_modify_file_time(dir_path, target_time, time_type="both", log_callback=None):
+    """
+    批量修改文件时间（新增）
+    :param dir_path: 目标目录
+    :param target_time: 目标时间（datetime对象）
+    :param time_type: 修改类型 - create(创建时间)/modify(修改时间)/both(两者)
+    :param log_callback: 日志回调
+    """
+
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+        else:
+            print(msg)
+
+    file_list = [f for f in Path(dir_path).glob("*") if f.is_file()]
+    file_count = len(file_list)
+    if file_count == 0:
+        log(f"❌ 目录 {dir_path} 下未找到文件")
+        return False
+
+    target_timestamp = datetime.timestamp(target_time)
+    modify_count = 0
+    log(f"🕒 开始批量修改文件时间，共找到 {file_count} 个文件")
+
+    for idx, file_path in enumerate(file_list):
+        try:
+            # Windows和Linux的时间修改差异处理
+            if time_type in ["create", "both"]:
+                if sys.platform == "win32":
+                    os.utime(file_path, (target_timestamp, target_timestamp))
+                else:
+                    # Linux下修改创建时间需要借助os.system（简化版）
+                    os.system(f"touch -t {target_time.strftime('%Y%m%d%H%M.%S')} {file_path}")
+
+            if time_type in ["modify", "both"]:
+                os.utime(file_path, (os.path.getatime(file_path), target_timestamp))
+
+            modify_count += 1
+        except PermissionError:
+            log(f"\n⚠️ 无权限修改 {file_path.name} 时间，请关闭该文件后重试")
+        except Exception as e:
+            log(f"\n⚠️ 处理 {file_path.name} 失败：{str(e)}")
+            continue
+
+        # 更新进度
+        if log_callback:
+            progress = int((idx + 1) / file_count * 100)
+            log(f"progress:{progress}")
+
+    log(f"✅ 时间修改完成，共处理 {modify_count} 个文件")
+    return True
+
+
+def batch_extract_exif(dir_path, output_csv, log_callback=None):
+    """
+    批量提取图片EXIF信息（新增）- 修复统计错误
+    :param dir_path: 图片目录
+    :param output_csv: 输出CSV文件路径
+    :param log_callback: 日志回调
+    """
+
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+        else:
+            print(msg)
+
+    SUPPORT_FORMATS = ["jpg", "jpeg", "png", "webp"]
+    img_list = []
+    for ext in SUPPORT_FORMATS:
+        img_list.extend(Path(dir_path).glob(f"*.{ext}"))
+        img_list.extend(Path(dir_path).glob(f"*.{ext.upper()}"))
+    # 去重 + 仅保留文件
+    img_list = list({f for f in img_list if f.is_file()})
+    img_count = len(img_list)
+
+    if img_count == 0:
+        log(f"❌ 目录 {dir_path} 下未找到支持的图片文件")
+        return False
+
+    # 准备CSV表头
+    headers = ["文件名", "路径", "宽度", "高度", "拍摄时间", "设备型号", "分辨率", "GPS信息"]
+    extract_count = 0
+    log(f"📷 开始提取EXIF信息，共找到 {img_count} 张图片")
+
+    try:
+        with open(output_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+
+            for idx, img_path in enumerate(img_list):
+                try:
+                    exif_data = {}
+                    with Image.open(img_path) as img:
+                        # 基础信息
+                        exif_data["文件名"] = img_path.name
+                        exif_data["路径"] = str(img_path.absolute())
+                        exif_data["宽度"] = img.width
+                        exif_data["高度"] = img.height
+                        exif_data["分辨率"] = f"{img.width}x{img.height}"
+                        exif_data["拍摄时间"] = ""
+                        exif_data["设备型号"] = ""
+                        exif_data["GPS信息"] = ""
+
+                        # 提取EXIF
+                        exif = img.getexif()
+                        if exif:
+                            # 映射EXIF标签
+                            exif_tag_map = {v: k for k, v in ExifTags.TAGS.items()}
+                            for tag_id, value in exif.items():
+                                tag_name = ExifTags.TAGS.get(tag_id, tag_id)
+                                # 拍摄时间
+                                if tag_name == "DateTimeOriginal":
+                                    exif_data["拍摄时间"] = value
+                                # 设备型号
+                                elif tag_name == "Model":
+                                    exif_data["设备型号"] = value
+                                # GPS信息（简化）
+                                elif tag_name == "GPSInfo":
+                                    exif_data["GPS信息"] = "有GPS数据" if value else ""
+
+                        writer.writerow(exif_data)
+                        extract_count += 1
+                except Exception as e:
+                    log(f"\n⚠️ 提取 {img_path.name} EXIF失败：{str(e)}")
+                    continue
+
+                # 更新进度
+                if log_callback:
+                    progress = int((idx + 1) / img_count * 100)
+                    log(f"progress:{progress}")
+
+    except PermissionError:
+        log(f"\n❌ 无权限写入CSV文件：{output_csv}")
+        return False
+    except Exception as e:
+        log(f"\n❌ CSV写入失败：{str(e)}")
+        return False
+
+    log(f"✅ EXIF提取完成，共处理 {extract_count} 张图片，结果已保存至：{output_csv}")
+    return True
+
+
+def batch_copy_move(dir_path, target_dir, mode="copy", exclude="", log_callback=None):
+    """
+    批量复制/移动文件（新增）
+    :param dir_path: 源目录
+    :param target_dir: 目标目录
+    :param mode: copy(复制)/move(移动)
+    :param exclude: 排除的扩展名（逗号分隔）
+    :param log_callback: 日志回调
+    """
+
+    def log(msg):
+        if log_callback:
+            log_callback(msg)
+        else:
+            print(msg)
+
+    file_list = [f for f in Path(dir_path).glob("*") if f.is_file()]
+    if exclude:
+        exclude_exts = [ext.strip() for ext in exclude.split(",")]
+        file_list = [f for f in file_list if f.suffix.lstrip(".") not in exclude_exts]
+    file_count = len(file_list)
+
+    if file_count == 0:
+        log(f"❌ 目录 {dir_path} 下未找到可处理的文件")
+        return False
+
+    target_path = Path(target_dir)
+    target_path.mkdir(exist_ok=True, parents=True)
+    process_count = 0
+
+    log(f"📤 开始批量{mode}文件，共找到 {file_count} 个文件")
+    for idx, file_path in enumerate(file_list):
+        try:
+            dest_path = target_path / file_path.name
+            if dest_path.exists():
+                # 重命名避免覆盖（加数字后缀）
+                dest_path = target_path / f"{file_path.stem}_{int(time.time())}{file_path.suffix}"
+
+            if mode == "copy":
+                import shutil
+                shutil.copy2(file_path, dest_path)
+            else:  # move
+                file_path.rename(dest_path)
+
+            process_count += 1
+        except PermissionError:
+            log(f"\n⚠️ 无权限操作 {file_path.name}，请关闭该文件后重试")
+        except Exception as e:
+            log(f"\n⚠️ 处理 {file_path.name} 失败：{str(e)}")
+            continue
+
+        # 更新进度
+        if log_callback:
+            progress = int((idx + 1) / file_count * 100)
+            log(f"progress:{progress}")
+
+    log(f"✅ 批量{mode}完成，共处理 {process_count} 个文件，目标目录：{target_path.absolute()}")
+    return True
+
+
+# ===================== 线程类（扩展支持新增任务） =====================
 class WorkerThread(QThread):
     """后台执行任务的线程，避免界面卡死"""
     log_signal = pyqtSignal(str)  # 日志信号
@@ -373,6 +629,28 @@ class WorkerThread(QThread):
                     watermark_path=self.params["watermark_path"],
                     log_callback=log_callback
                 )
+            # 新增任务类型
+            elif self.task_type == "modify_time":
+                result = batch_modify_file_time(
+                    dir_path=self.params["dir"],
+                    target_time=self.params["target_time"],
+                    time_type=self.params["time_type"],
+                    log_callback=log_callback
+                )
+            elif self.task_type == "extract_exif":
+                result = batch_extract_exif(
+                    dir_path=self.params["dir"],
+                    output_csv=self.params["output_csv"],
+                    log_callback=log_callback
+                )
+            elif self.task_type == "copy_move":
+                result = batch_copy_move(
+                    dir_path=self.params["dir"],
+                    target_dir=self.params["target_dir"],
+                    mode=self.params["mode"],
+                    exclude=self.params["exclude"],
+                    log_callback=log_callback
+                )
             else:
                 result = False
                 self.log_signal.emit("❌ 不支持的任务类型")
@@ -382,7 +660,7 @@ class WorkerThread(QThread):
             self.finish_signal.emit(False)
 
 
-# ===================== 主界面类 =====================
+# ===================== 主界面类（扩展新增标签页） =====================
 class FileToolMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -412,7 +690,12 @@ class FileToolMainWindow(QMainWindow):
         self.init_compress_tab()
         self.init_classify_tab()
         self.init_watermark_tab()
+        # 新增标签页
+        self.init_modify_time_tab()
+        self.init_extract_exif_tab()
+        self.init_copy_move_tab()
 
+    # ===================== 标签页初始化 =====================
     def init_rename_tab(self):
         """批量重命名标签页"""
         tab = QWidget()
@@ -772,7 +1055,7 @@ class FileToolMainWindow(QMainWindow):
 
         layout.addWidget(self.image_watermark_group)
 
-        # 执行按钮和进度条（保持原有逻辑）
+        # 执行按钮和进度条
         btn_layout = QHBoxLayout()
         self.watermark_run_btn = QPushButton("开始加水印")
         self.watermark_run_btn.clicked.connect(self.run_watermark)
@@ -792,7 +1075,200 @@ class FileToolMainWindow(QMainWindow):
         log_layout.addWidget(self.watermark_log_edit)
         layout.addWidget(log_group)
 
-    # ===================== 通用工具函数 =====================
+    # ===================== 新增标签页初始化 =====================
+    def init_modify_time_tab(self):
+        """批量修改文件时间标签页（新增）"""
+        tab = QWidget()
+        self.tab_widget.addTab(tab, "批量修改文件时间")
+
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # 目录选择
+        dir_group = QGroupBox("目标目录")
+        dir_layout = QHBoxLayout(dir_group)
+        self.modify_time_dir_edit = QLineEdit()
+        self.modify_time_dir_edit.setPlaceholderText("请选择要修改时间的文件目录")
+        dir_btn = QPushButton("选择目录")
+        dir_btn.clicked.connect(lambda: self.select_dir(self.modify_time_dir_edit))
+        dir_layout.addWidget(self.modify_time_dir_edit)
+        dir_layout.addWidget(dir_btn)
+        layout.addWidget(dir_group)
+
+        # 时间设置
+        time_group = QGroupBox("时间参数")
+        time_layout = QVBoxLayout(time_group)
+
+        # 目标时间
+        time_layout1 = QHBoxLayout()
+        time_layout1.addWidget(QLabel("目标时间："))
+        self.modify_time_datetime = QDateTimeEdit()
+        self.modify_time_datetime.setDateTime(QDateTime.currentDateTime())
+        self.modify_time_datetime.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        time_layout1.addWidget(self.modify_time_datetime)
+        time_layout1.addStretch()
+        time_layout.addLayout(time_layout1)
+
+        # 修改类型
+        time_layout2 = QHBoxLayout()
+        time_layout2.addWidget(QLabel("修改类型："))
+        self.modify_time_type_combo = QComboBox()
+        self.modify_time_type_combo.addItems(["both（创建+修改）", "create（仅创建）", "modify（仅修改）"])
+        time_layout2.addWidget(self.modify_time_type_combo)
+        time_layout2.addStretch()
+        time_layout.addLayout(time_layout2)
+
+        layout.addWidget(time_group)
+
+        # 执行按钮和进度条
+        btn_layout = QHBoxLayout()
+        self.modify_time_run_btn = QPushButton("开始修改")
+        self.modify_time_run_btn.clicked.connect(self.run_modify_time)
+        btn_layout.addWidget(self.modify_time_run_btn)
+
+        self.modify_time_progress = QProgressBar()
+        self.modify_time_progress.setRange(0, 100)
+        self.modify_time_progress.setValue(0)
+        btn_layout.addWidget(self.modify_time_progress)
+        layout.addLayout(btn_layout)
+
+        # 日志输出
+        log_group = QGroupBox("执行日志")
+        log_layout = QVBoxLayout(log_group)
+        self.modify_time_log_edit = QTextEdit()
+        self.modify_time_log_edit.setReadOnly(True)
+        log_layout.addWidget(self.modify_time_log_edit)
+        layout.addWidget(log_group)
+
+    def init_extract_exif_tab(self):
+        """提取图片EXIF信息标签页（新增）"""
+        tab = QWidget()
+        self.tab_widget.addTab(tab, "提取图片EXIF信息")
+
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # 目录选择
+        dir_group = QGroupBox("图片目录")
+        dir_layout = QHBoxLayout(dir_group)
+        self.extract_exif_dir_edit = QLineEdit()
+        self.extract_exif_dir_edit.setPlaceholderText("请选择要提取EXIF的图片目录")
+        dir_btn = QPushButton("选择目录")
+        dir_btn.clicked.connect(lambda: self.select_dir(self.extract_exif_dir_edit))
+        dir_layout.addWidget(self.extract_exif_dir_edit)
+        dir_layout.addWidget(dir_btn)
+        layout.addWidget(dir_group)
+
+        # 输出设置
+        output_group = QGroupBox("输出设置")
+        output_layout = QHBoxLayout(output_group)
+        output_layout.addWidget(QLabel("CSV保存路径："))
+        self.extract_exif_output_edit = QLineEdit()
+        self.extract_exif_output_edit.setPlaceholderText("默认：目录名_exif.csv")
+        output_btn = QPushButton("选择保存位置")
+        output_btn.clicked.connect(lambda: self.select_save_file(self.extract_exif_output_edit, "CSV文件 (*.csv)"))
+        output_layout.addWidget(self.extract_exif_output_edit)
+        output_layout.addWidget(output_btn)
+        layout.addWidget(output_group)
+
+        # 执行按钮和进度条
+        btn_layout = QHBoxLayout()
+        self.extract_exif_run_btn = QPushButton("开始提取")
+        self.extract_exif_run_btn.clicked.connect(self.run_extract_exif)
+        btn_layout.addWidget(self.extract_exif_run_btn)
+
+        self.extract_exif_progress = QProgressBar()
+        self.extract_exif_progress.setRange(0, 100)
+        self.extract_exif_progress.setValue(0)
+        btn_layout.addWidget(self.extract_exif_progress)
+        layout.addLayout(btn_layout)
+
+        # 日志输出
+        log_group = QGroupBox("执行日志")
+        log_layout = QVBoxLayout(log_group)
+        self.extract_exif_log_edit = QTextEdit()
+        self.extract_exif_log_edit.setReadOnly(True)
+        log_layout.addWidget(self.extract_exif_log_edit)
+        layout.addWidget(log_group)
+
+    def init_copy_move_tab(self):
+        """批量复制/移动文件标签页（新增）"""
+        tab = QWidget()
+        self.tab_widget.addTab(tab, "批量复制/移动文件")
+
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # 源目录
+        src_group = QGroupBox("源目录")
+        src_layout = QHBoxLayout(src_group)
+        self.copy_move_src_edit = QLineEdit()
+        self.copy_move_src_edit.setPlaceholderText("请选择要复制/移动的文件目录")
+        src_btn = QPushButton("选择目录")
+        src_btn.clicked.connect(lambda: self.select_dir(self.copy_move_src_edit))
+        src_layout.addWidget(self.copy_move_src_edit)
+        src_layout.addWidget(src_btn)
+        layout.addWidget(src_group)
+
+        # 目标目录
+        dest_group = QGroupBox("目标目录")
+        dest_layout = QHBoxLayout(dest_group)
+        self.copy_move_dest_edit = QLineEdit()
+        self.copy_move_dest_edit.setPlaceholderText("请选择目标目录")
+        dest_btn = QPushButton("选择目录")
+        dest_btn.clicked.connect(lambda: self.select_dir(self.copy_move_dest_edit))
+        dest_layout.addWidget(self.copy_move_dest_edit)
+        dest_layout.addWidget(dest_btn)
+        layout.addWidget(dest_group)
+
+        # 操作参数
+        param_group = QGroupBox("操作参数")
+        param_layout = QVBoxLayout(param_group)
+
+        # 操作类型
+        type_layout = QHBoxLayout()
+        type_layout.addWidget(QLabel("操作类型："))
+        self.copy_move_mode_combo = QComboBox()
+        self.copy_move_mode_combo.addItems(["copy（复制）", "move（移动）"])
+        type_layout.addWidget(self.copy_move_mode_combo)
+        type_layout.addStretch()
+        param_layout.addLayout(type_layout)
+
+        # 排除扩展名
+        exclude_layout = QHBoxLayout()
+        exclude_layout.addWidget(QLabel("排除扩展名："))
+        self.copy_move_exclude_edit = QLineEdit()
+        self.copy_move_exclude_edit.setPlaceholderText("例如：zip,log,tmp（逗号分隔）")
+        exclude_layout.addWidget(self.copy_move_exclude_edit)
+        exclude_layout.addStretch()
+        param_layout.addLayout(exclude_layout)
+
+        layout.addWidget(param_group)
+
+        # 执行按钮和进度条
+        btn_layout = QHBoxLayout()
+        self.copy_move_run_btn = QPushButton("开始执行")
+        self.copy_move_run_btn.clicked.connect(self.run_copy_move)
+        btn_layout.addWidget(self.copy_move_run_btn)
+
+        self.copy_move_progress = QProgressBar()
+        self.copy_move_progress.setRange(0, 100)
+        self.copy_move_progress.setValue(0)
+        btn_layout.addWidget(self.copy_move_progress)
+        layout.addLayout(btn_layout)
+
+        # 日志输出
+        log_group = QGroupBox("执行日志")
+        log_layout = QVBoxLayout(log_group)
+        self.copy_move_log_edit = QTextEdit()
+        self.copy_move_log_edit.setReadOnly(True)
+        log_layout.addWidget(self.copy_move_log_edit)
+        layout.addWidget(log_group)
+
+    # ===================== 通用工具函数（保留+适配） =====================
     def select_dir(self, line_edit):
         """选择目录并填充到输入框"""
         dir_path = QFileDialog.getExistingDirectory(self, "选择目录")
@@ -834,18 +1310,18 @@ class FileToolMainWindow(QMainWindow):
     # ===================== 任务执行函数 =====================
     def run_rename(self):
         """执行批量重命名"""
-        # 校验参数
+        # 严格校验目录
         dir_path = self.rename_dir_edit.text().strip()
-        if not dir_path or not Path(dir_path).exists():
-            QMessageBox.warning(self, "警告", "请选择有效的目标目录！")
+        if not dir_path or not Path(dir_path).is_dir():
+            QMessageBox.warning(self, "警告", "请选择**有效的本地目录**！")
             return
 
         # 清空日志和进度
         self.clear_log_and_progress(self.rename_log_edit, self.rename_progress)
-        # 禁用按钮
+        # 禁用按钮，防止重复点击
         self.rename_run_btn.setEnabled(False)
 
-        # 构造参数
+        # 构造参数（统一去除首尾空格，避免无效前缀/后缀）
         params = {
             "dir": dir_path,
             "prefix": self.rename_prefix_edit.text().strip(),
@@ -854,7 +1330,7 @@ class FileToolMainWindow(QMainWindow):
             "replace": self.rename_replace_edit.text().strip()
         }
 
-        # 创建线程
+        # 创建线程执行
         self.rename_thread = WorkerThread("rename", params)
         self.rename_thread.log_signal.connect(lambda msg: self.append_log(self.rename_log_edit, msg))
         self.rename_thread.progress_signal.connect(self.rename_progress.setValue)
@@ -965,6 +1441,90 @@ class FileToolMainWindow(QMainWindow):
         self.watermark_thread.progress_signal.connect(self.watermark_progress.setValue)
         self.watermark_thread.finish_signal.connect(lambda res: self.task_finish(res, self.watermark_run_btn))
         self.watermark_thread.start()
+
+    # ===================== 新增任务执行函数 =====================
+    def run_modify_time(self):
+        """执行批量修改文件时间"""
+        dir_path = self.modify_time_dir_edit.text().strip()
+        if not dir_path or not Path(dir_path).exists():
+            QMessageBox.warning(self, "警告", "请选择有效的目标目录！")
+            return
+
+        self.clear_log_and_progress(self.modify_time_log_edit, self.modify_time_progress)
+        self.modify_time_run_btn.setEnabled(False)
+
+        # 解析参数
+        target_time = self.modify_time_datetime.dateTime().toPyDateTime()
+        time_type = self.modify_time_type_combo.currentText().split("（")[0]
+
+        params = {
+            "dir": dir_path,
+            "target_time": target_time,
+            "time_type": time_type
+        }
+
+        self.modify_time_thread = WorkerThread("modify_time", params)
+        self.modify_time_thread.log_signal.connect(lambda msg: self.append_log(self.modify_time_log_edit, msg))
+        self.modify_time_thread.progress_signal.connect(self.modify_time_progress.setValue)
+        self.modify_time_thread.finish_signal.connect(lambda res: self.task_finish(res, self.modify_time_run_btn))
+        self.modify_time_thread.start()
+
+    def run_extract_exif(self):
+        """执行提取EXIF信息"""
+        dir_path = self.extract_exif_dir_edit.text().strip()
+        if not dir_path or not Path(dir_path).exists():
+            QMessageBox.warning(self, "警告", "请选择有效的图片目录！")
+            return
+
+        # 处理默认输出路径
+        output_csv = self.extract_exif_output_edit.text().strip()
+        if not output_csv:
+            output_csv = f"{dir_path}_exif.csv"
+
+        self.clear_log_and_progress(self.extract_exif_log_edit, self.extract_exif_progress)
+        self.extract_exif_run_btn.setEnabled(False)
+
+        params = {
+            "dir": dir_path,
+            "output_csv": output_csv
+        }
+
+        self.extract_exif_thread = WorkerThread("extract_exif", params)
+        self.extract_exif_thread.log_signal.connect(lambda msg: self.append_log(self.extract_exif_log_edit, msg))
+        self.extract_exif_thread.progress_signal.connect(self.extract_exif_progress.setValue)
+        self.extract_exif_thread.finish_signal.connect(lambda res: self.task_finish(res, self.extract_exif_run_btn))
+        self.extract_exif_thread.start()
+
+    def run_copy_move(self):
+        """执行批量复制/移动文件"""
+        src_dir = self.copy_move_src_edit.text().strip()
+        dest_dir = self.copy_move_dest_edit.text().strip()
+        if not src_dir or not Path(src_dir).exists():
+            QMessageBox.warning(self, "警告", "请选择有效的源目录！")
+            return
+        if not dest_dir:
+            QMessageBox.warning(self, "警告", "请选择有效的目标目录！")
+            return
+
+        self.clear_log_and_progress(self.copy_move_log_edit, self.copy_move_progress)
+        self.copy_move_run_btn.setEnabled(False)
+
+        # 解析参数
+        mode = self.copy_move_mode_combo.currentText().split("（")[0]
+        exclude = self.copy_move_exclude_edit.text().strip()
+
+        params = {
+            "dir": src_dir,
+            "target_dir": dest_dir,
+            "mode": mode,
+            "exclude": exclude
+        }
+
+        self.copy_move_thread = WorkerThread("copy_move", params)
+        self.copy_move_thread.log_signal.connect(lambda msg: self.append_log(self.copy_move_log_edit, msg))
+        self.copy_move_thread.progress_signal.connect(self.copy_move_progress.setValue)
+        self.copy_move_thread.finish_signal.connect(lambda res: self.task_finish(res, self.copy_move_run_btn))
+        self.copy_move_thread.start()
 
     def task_finish(self, result, btn):
         """任务完成后启用按钮并提示"""
